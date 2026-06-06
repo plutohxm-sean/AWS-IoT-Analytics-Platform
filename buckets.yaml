@@ -1,0 +1,96 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: LKS 2024 - S3 Buckets
+
+Parameters:
+  Province: {Type: String, Default: jawatimur}
+  MyPublicIP:
+    Type: String
+    Description: IP publik kamu untuk akses bucket model (cek di whatismyip.com)
+
+Resources:
+
+  # ── Bucket 1: Static Website ──────────────────
+  BucketWeb:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub lks-bucketweb-${Province}
+      WebsiteConfiguration:
+        IndexDocument: index.html
+        ErrorDocument: index.html
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: false
+        BlockPublicPolicy: false
+        IgnorePublicAcls: false
+        RestrictPublicBuckets: false
+  BucketWebPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref BucketWeb
+      PolicyDocument:
+        Statement:
+          - Effect: Allow
+            Principal: '*'
+            Action: s3:GetObject
+            Resource: !Sub '${BucketWeb.Arn}/*'
+
+  # ── Bucket 2: Firehose + Versioning ──────────
+  BucketFirehose:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub lks-bucketfirehose-${Province}
+      VersioningConfiguration: {Status: Enabled}
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: false
+        BlockPublicPolicy: false
+        IgnorePublicAcls: false
+        RestrictPublicBuckets: false
+  BucketFirehosePolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref BucketFirehose
+      PolicyDocument:
+        Statement:
+          - Effect: Allow
+            Principal: '*'
+            Action: s3:GetObject
+            Resource: !Sub '${BucketFirehose.Arn}/*'
+
+  # ── Bucket 3: SageMaker Model (restricted IP) ─
+  BucketModel:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub lks-bucketmodel-${Province}
+      LifecycleConfiguration:
+        Rules:
+          - Id: archive-and-delete
+            Status: Enabled
+            Transitions:
+              - TransitionInDays: 30
+                StorageClass: GLACIER
+            ExpirationInDays: 365
+  BucketModelPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref BucketModel
+      PolicyDocument:
+        Statement:
+          - Effect: Allow
+            Principal: '*'
+            Action: 's3:*'
+            Resource:
+              - !Sub '${BucketModel.Arn}'
+              - !Sub '${BucketModel.Arn}/*'
+            Condition:
+              IpAddress:
+                aws:SourceIp: !Ref MyPublicIP
+
+Outputs:
+  WebsiteURL:
+    Value: !GetAtt BucketWeb.WebsiteURL
+aws cloudformation deploy \
+  --stack-name lksbucket \
+  --template-file cfn/buckets.yaml \
+  --parameter-overrides \
+    Province=jawatimur \
+    MyPublicIP=203.0.113.10/32 \
+  --region us-west-2
