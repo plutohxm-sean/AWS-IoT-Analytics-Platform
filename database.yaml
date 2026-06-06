@@ -1,0 +1,46 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: LKS 2024 - RDS MariaDB
+
+Resources:
+
+  DBSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupName: lks-db-subnet-group
+      DBSubnetGroupDescription: LKS 2024 private subnets for RDS
+      SubnetIds:
+        - !ImportValue lks-PriSubA
+        - !ImportValue lks-PriSubB
+        - !ImportValue lks-PriSubC
+
+  LKSDatabase:
+    Type: AWS::RDS::DBInstance
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      DBInstanceIdentifier: dbiot
+      DBInstanceClass: db.t3.micro
+      Engine: mariadb
+      EngineVersion: '10.6.25'
+      MasterUsername: admin
+      MasterUserPassword: Lksncc2024!
+      DBName: dbiot
+      AllocatedStorage: 20
+      StorageType: gp2
+      StorageEncrypted: true
+      PubliclyAccessible: false
+      MultiAZ: false
+      AutoMinorVersionUpgrade: true
+      BackupRetentionPeriod: 7
+      DBSubnetGroupName: !Ref DBSubnetGroup
+      VPCSecurityGroups:
+        - !ImportValue lks-SGDB
+      Tags: [{Key: Name, Value: dbiot}]
+
+Outputs:
+  DBEndpoint:
+    Value: !GetAtt LKSDatabase.Endpoint.Address
+    Export: {Name: lks-DBEndpoint}
+  DBName:
+    Value: dbiot
+    Export: {Name: lks-DBName}
