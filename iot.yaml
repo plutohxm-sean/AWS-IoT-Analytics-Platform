@@ -1,0 +1,77 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: LKS 2024 - IoT Core
+
+Parameters:
+  CertificateArn:
+    Type: String
+    Description: ARN dari certificate yang sudah dibuat via CLI
+  Province:
+    Type: String
+    Default: jawatimur
+
+Resources:
+
+  LKSThing:
+    Type: AWS::IoT::Thing
+    Properties:
+      ThingName: lksiot
+
+  LKSPolicy:
+    Type: AWS::IoT::Policy
+    Properties:
+      PolicyName: lksiotpolices
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action:
+              - iot:Connect
+              - iot:Publish
+              - iot:Receive
+              - iot:Subscribe
+            Resource: '*'
+
+  ThingPrincipalAttach:
+    Type: AWS::IoT::ThingPrincipalAttachment
+    Properties:
+      ThingName: !Ref LKSThing
+      Principal: !Ref CertificateArn
+
+  PolicyPrincipalAttach:
+    Type: AWS::IoT::PolicyPrincipalAttachment
+    Properties:
+      PolicyName: !Ref LKSPolicy
+      Principal: !Ref CertificateArn
+
+  # ── IoT Rule 1: Kinesis Data Stream ───────────
+  RuleDatastream:
+    Type: AWS::IoT::TopicRule
+    Properties:
+      RuleName: !Sub lks_datastream_${Province}
+      TopicRulePayload:
+        Description: Rules for Devices connect to Analytics
+        Sql: "SELECT * FROM 'datasensor'"
+        AwsIotSqlVersion: '2016-03-23'
+        RuleDisabled: false
+        Actions:
+          - Kinesis:
+              StreamName: lksdatastreamiot
+              PartitionKey: '${newuuid()}'
+              RoleArn: !Sub 'arn:aws:iam::${AWS::AccountId}:role/LabRole'
+
+  # ── IoT Rule 2: Kinesis Firehose ──────────────
+  RuleFirehose:
+    Type: AWS::IoT::TopicRule
+    Properties:
+      RuleName: !Sub lks_firehose_${Province}
+      TopicRulePayload:
+        Description: Rules for Devices connect to Kinesis
+        Sql: "SELECT * FROM 'datasensor'"
+        AwsIotSqlVersion: '2016-03-23'
+        RuleDisabled: false
+        Actions:
+          - Firehose:
+              DeliveryStreamName: LKS-Firehose-2024
+              Separator: |
+                
+              RoleArn: !Sub 'arn:aws:iam::${AWS::AccountId}:role/LabRole'
