@@ -1,0 +1,23 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: LKS 2024 - SageMaker Notebook
+
+Parameters:
+  Province: {Type: String, Default: jawatimur}
+
+Resources:
+  LKSNotebook:
+    Type: AWS::SageMaker::NotebookInstance
+    Properties:
+      NotebookInstanceName: !Sub iotml-${Province}
+      InstanceType: ml.t3.medium
+      PlatformIdentifier: notebook-al2-v3
+      RoleArn: !Sub 'arn:aws:iam::${AWS::AccountId}:role/LabRole'
+      DefaultCodeRepository: https://github.com/handipradana/lksn2024
+
+Outputs:
+  NotebookName: {Value: !Ref LKSNotebook}
+aws cloudformation deploy \
+  --stack-name lksml \
+  --template-file cfn/sagemaker.yaml \
+  --parameter-overrides Province=jawatimur \
+  --region us-west-2
