@@ -8,6 +8,11 @@ Parameters:
   Province:
     Type: String
     Default: jawatimur
+  RuleFirehoseFnSub:
+    Type: String
+    Default: arn:aws:iam::${AWS::AccountId}:role/LabRole
+    Description: Role ARN for Kinesis Firehose action
+
 
 Resources:
 
@@ -57,7 +62,7 @@ Resources:
           - Kinesis:
               StreamName: lksdatastreamiot
               PartitionKey: '${newuuid()}'
-              RoleArn: !Sub 'arn:aws:iam::${AWS::AccountId}:role/LabRole'
+              RoleArn: !Sub !Ref RuleFirehoseFnSub
 
   # ── IoT Rule 2: Kinesis Firehose ──────────────
   RuleFirehose:
@@ -72,6 +77,5 @@ Resources:
         Actions:
           - Firehose:
               DeliveryStreamName: LKS-Firehose-2024
-              Separator: |
-                
-              RoleArn: !Sub 'arn:aws:iam::${AWS::AccountId}:role/LabRole'
+              Separator: '\n'
+              RoleArn: !Sub !Ref RuleFirehoseFnSub
