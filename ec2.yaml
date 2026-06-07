@@ -1,0 +1,407 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Create an EC2 instance with VPC and security group for SSH access - Using existing prod-lks key pair'
+
+Parameters:
+  KeyPairName:
+    Description: 'EC2 Key Pair for SSH access'
+    Type: String
+    Default: 'prod-lks'
+    ConstraintDescription: 'Must be the name of an existing EC2 KeyPair'
+
+  InstanceType:
+    Description: 'EC2 instance type'
+    Type: String
+    Default: 't2.micro'
+    AllowedValues: 
+      - t2.micro
+      - t2.small
+      - t2.medium
+    ConstraintDescription: 'Must be a valid EC2 instance type'
+
+  SSHLocation:
+    Description: 'IP address range that can SSH to the EC2 instance'
+    Type: String
+    MinLength: 9
+    MaxLength: 18
+    Default: '0.0.0.0/0'
+    AllowedPattern: '(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})/(\d{1,2})'
+    ConstraintDescription: 'Must be a valid IP CIDR range of the form x.x.x.x/x'
+
+  ProjectName:
+    Description: 'Project name for resource tagging'
+    Type: String
+    Default: 'ProdLKS'
+    AllowedPattern: '[A-Za-z0-9-]+'
+
+Mappings:
+  RegionMap:
+    us-east-1:
+      AMI: ami-0c02fb55956c7d316
+    us-west-1:
+      AMI: ami-0d53d72369335a9d6
+    us-west-2:
+      AMI: ami-0c2d3e23d757c2c99
+    eu-west-1:
+      AMI: ami-0c9c942bd7bf113a2
+    ap-southeast-1:
+      AMI: ami-0c802847a7dd848c0
+
+Resources:
+  # VPC
+  MyVPC:
+    Type: 'AWS::EC2::VPC'
+    Properties:
+      CidrBlock: '10.0.0.0/16'
+      EnableDnsHostnames: true
+      EnableDnsSupport: true
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProjectName}-VPC'
+        - Key: Project
+          Value: !Ref ProjectName
+
+  # Internet Gateway
+  MyInternetGateway:
+    Type: 'AWS::EC2::InternetGateway'
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProjectName}-IGW'
+        - Key: Project
+          Value: !Ref ProjectName
+
+  # Attach Internet Gateway to VPC
+  AttachGateway:
+    Type: 'AWS::EC2::VPCGatewayAttachment'
+    Properties:
+      VpcId: !Ref MyVPC
+      InternetGatewayId: !Ref MyInternetGateway
+
+  # Public Subnet
+  PublicSubnet:
+    Type: 'AWS::EC2::Subnet'
+    Properties:
+      VpcId: !Ref MyVPC
+      CidrBlock: '10.0.1.0/24'
+      AvailabilityZone: !Select [0, !GetAZs '']
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProjectName}-Public-Subnet'
+        - Key: Project
+          Value: !Ref ProjectName
+
+  # Route Table
+  PublicRouteTable:
+    Type: 'AWS::EC2::RouteTable'
+    Properties:
+      VpcId: !Ref MyVPC
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProjectName}-Public-RT'
+        - Key: Project
+          Value: !Ref ProjectName
+
+  # Public Route
+  PublicRoute:
+    Type: 'AWS::EC2::Route'
+    DependsOn: AttachGateway
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: '0.0.0.0/0'
+      GatewayId: !Ref MyInternetGateway
+
+  # Associate Route Table with Subnet
+  SubnetRouteTableAssociation:
+    Type: 'AWS::EC2::SubnetRouteTableAssociation'
+    Properties:
+      SubnetId: !Ref PublicSubnet
+      RouteTableId: !Ref PublicRouteTable
+
+  # Security Group
+  InstanceSecurityGroup:
+    Type: 'AWS::EC2::SecurityGroup'
+    Properties:
+      GroupName: !Sub '${ProjectName}-SSH-HTTP-SG'
+      GroupDescription: 'Enable SSH and HTTP access'
+      VpcId: !Ref MyVPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: !Ref SSHLocation
+          Description: 'SSH access from specified IP range'
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: '0.0.0.0/0'
+          Description: 'HTTP access from anywhere'
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: '0.0.0.0/0'
+          Description: 'HTTPS access from anywhere'
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: '0.0.0.0/0'
+          Description: 'All outbound traffic'
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProjectName}-Security-Group'
+        - Key: Project
+          Value: !Ref ProjectName
+
+  # IAM Role
+  MyInstanceRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      RoleName: !Sub '${ProjectName}-EC2-Role'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: 'sts:AssumeRole'
+      ManagedPolicyArns:
+        - 'arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore'
+        - 'arn:aws:iam::aws:policy/CloudWatchAgentServerPolicy'
+      Policies:
+        - PolicyName: 'EC2BasicAccess'
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'ec2:DescribeInstances'
+                  - 'ec2:DescribeTags'
+                Resource: '*'
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProjectName}-EC2-Role'
+        - Key: Project
+          Value: !Ref ProjectName
+
+  # Instance Profile
+  MyInstanceProfile:
+    Type: 'AWS::IAM::InstanceProfile'
+    Properties:
+      InstanceProfileName: !Sub '${ProjectName}-EC2-Profile'
+      Roles:
+        - !Ref MyInstanceRole
+
+  # EC2 Instance
+  MyInstance:
+    Type: 'AWS::EC2::Instance'
+    Properties:
+      ImageId: !FindInMap [RegionMap, !Ref 'AWS::Region', AMI]
+      InstanceType: !Ref InstanceType
+      KeyName: !Ref KeyPairName
+      IamInstanceProfile: !Ref MyInstanceProfile
+      SubnetId: !Ref PublicSubnet
+      SecurityGroupIds:
+        - !Ref InstanceSecurityGroup
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          yum update -y
+          yum install -y httpd php aws-cli
+          systemctl start httpd
+          systemctl enable httpd
+          
+          # Create a comprehensive webpage
+          cat > /var/www/html/index.html << 'EOF'
+          <!DOCTYPE html>
+          <html lang="en">
+          <head>
+              <meta charset="UTF-8">
+              <meta name="viewport" content="width=device-width, initial-scale=1.0">
+              <title>${ProjectName} - CloudFormation EC2</title>
+              <style>
+                  * { margin: 0; padding: 0; box-sizing: border-box; }
+                  body { 
+                      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; 
+                      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                      min-height: 100vh; padding: 20px;
+                  }
+                  .container { 
+                      max-width: 1000px; margin: 0 auto; background: white; 
+                      border-radius: 15px; box-shadow: 0 20px 40px rgba(0,0,0,0.1);
+                      overflow: hidden;
+                  }
+                  .header { 
+                      background: linear-gradient(135deg, #2c3e50 0%, #34495e 100%);
+                      color: white; padding: 40px; text-align: center;
+                  }
+                  .header h1 { font-size: 2.5em; margin-bottom: 10px; }
+                  .content { padding: 40px; }
+                  .info-grid { 
+                      display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+                      gap: 20px; margin: 30px 0;
+                  }
+                  .info-card { 
+                      background: #f8f9fa; padding: 25px; border-radius: 10px;
+                      border-left: 4px solid #3498db;
+                  }
+                  .info-card h3 { color: #2c3e50; margin-bottom: 15px; }
+                  .badge { 
+                      display: inline-block; background: #3498db; color: white;
+                      padding: 8px 16px; border-radius: 20px; margin: 5px;
+                      font-size: 0.9em; font-weight: bold;
+                  }
+                  .command { 
+                      background: #2c3e50; color: #ecf0f1; padding: 15px;
+                      border-radius: 5px; font-family: 'Courier New', monospace;
+                      margin: 10px 0; overflow-x: auto;
+                  }
+                  .success { background: #d4edda; border-left-color: #28a745; }
+                  .warning { background: #fff3cd; border-left-color: #ffc107; }
+              </style>
+          </head>
+          <body>
+              <div class="container">
+                  <div class="header">
+                      <h1>🚀 ${ProjectName} Server</h1>
+                      <p>CloudFormation EC2 Instance Successfully Deployed!</p>
+                      <div style="margin-top: 20px;">
+                          <span class="badge">CloudFormation</span>
+                          <span class="badge">EC2</span>
+                          <span class="badge">VPC</span>
+                          <span class="badge">prod-lks</span>
+                      </div>
+                  </div>
+                  
+                  <div class="content">
+                      <div class="info-grid">
+                          <div class="info-card success">
+                              <h3>📋 Instance Information</h3>
+                              <p><strong>Project:</strong> ${ProjectName}</p>
+                              <p><strong>Instance Type:</strong> ${InstanceType}</p>
+                              <p><strong>Region:</strong> ${AWS::Region}</p>
+                              <p><strong>Key Pair:</strong> ${KeyPairName}</p>
+                              <p><strong>Stack:</strong> ${AWS::StackName}</p>
+                          </div>
+                          
+                          <div class="info-card">
+                              <h3>🏗️ Infrastructure Created</h3>
+                              <ul>
+                                  <li>✅ VPC (10.0.0.0/16)</li>
+                                  <li>✅ Public Subnet (10.0.1.0/24)</li>
+                                  <li>✅ Internet Gateway</li>
+                                  <li>✅ Route Table & Routes</li>
+                                  <li>✅ Security Group (SSH + HTTP/HTTPS)</li>
+                                  <li>✅ IAM Role with SSM access</li>
+                                  <li>✅ EC2 Instance with Apache</li>
+                              </ul>
+                          </div>
+                          
+                          <div class="info-card warning">
+                              <h3>🔐 SSH Access</h3>
+                              <p>Connect using your <strong>prod-lks</strong> key pair:</p>
+                              <div class="command">ssh -i prod-lks.pem ec2-user@[PUBLIC_IP]</div>
+                              <p><small>Replace [PUBLIC_IP] with actual public IP from CloudFormation outputs</small></p>
+                          </div>
+                          
+                          <div class="info-card">
+                              <h3>🎯 Next Steps</h3>
+                              <ul>
+                                  <li>🔧 Configure applications</li>
+                                  <li>📊 Set up monitoring</li>
+                                  <li>🔒 Harden security</li>
+                                  <li>📈 Add auto scaling</li>
+                                  <li>🗄️ Add database</li>
+                              </ul>
+                          </div>
+                      </div>
+                      
+                      <div class="info-card">
+                          <h3>💡 CloudFormation Benefits Demonstrated</h3>
+                          <ul>
+                              <li><strong>Infrastructure as Code:</strong> Entire setup defined in YAML</li>
+                              <li><strong>Reproducible:</strong> Deploy identical infrastructure anywhere</li>
+                              <li><strong>Version Controlled:</strong> Track infrastructure changes</li>
+                              <li><strong>Automated:</strong> No manual configuration needed</li>
+                              <li><strong>Rollback:</strong> Automatic rollback on failure</li>
+                          </ul>
+                      </div>
+                  </div>
+              </div>
+          </body>
+          </html>
+          EOF
+          
+          # Create server info page
+          cat > /var/www/html/info.php << 'PHP'
+          <?php
+          echo "<h2>Server Runtime Information</h2>";
+          echo "<p><strong>Instance ID:</strong> " . @file_get_contents('http://169.254.169.254/latest/meta-data/instance-id') . "</p>";
+          echo "<p><strong>Instance Type:</strong> " . @file_get_contents('http://169.254.169.254/latest/meta-data/instance-type') . "</p>";
+          echo "<p><strong>Public IP:</strong> " . @file_get_contents('http://169.254.169.254/latest/meta-data/public-ipv4') . "</p>";
+          echo "<p><strong>Private IP:</strong> " . @file_get_contents('http://169.254.169.254/latest/meta-data/local-ipv4') . "</p>";
+          echo "<p><strong>Availability Zone:</strong> " . @file_get_contents('http://169.254.169.254/latest/meta-data/placement/availability-zone') . "</p>";
+          echo "<p><strong>Security Groups:</strong> " . @file_get_contents('http://169.254.169.254/latest/meta-data/security-groups') . "</p>";
+          echo "<hr>";
+          phpinfo();
+          ?>
+          PHP
+          
+          systemctl restart httpd
+          
+          # Install CloudWatch agent (optional)
+          yum install -y amazon-cloudwatch-agent
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProjectName}-EC2-Instance'
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: KeyPair
+          Value: !Ref KeyPairName
+
+Outputs:
+  InstanceId:
+    Description: 'Instance ID of the newly created EC2 instance'
+    Value: !Ref MyInstance
+    Export:
+      Name: !Sub '${AWS::StackName}-InstanceId'
+
+  PublicIP:
+    Description: 'Public IP address of the newly created EC2 instance'
+    Value: !GetAtt MyInstance.PublicIp
+    Export:
+      Name: !Sub '${AWS::StackName}-PublicIP'
+
+  PublicDNS:
+    Description: 'Public DNS name of the newly created EC2 instance'
+    Value: !GetAtt MyInstance.PublicDnsName
+    Export:
+      Name: !Sub '${AWS::StackName}-PublicDNS'
+
+  WebsiteURL:
+    Description: 'Website URL'
+    Value: !Sub 'http://${MyInstance.PublicDnsName}'
+    Export:
+      Name: !Sub '${AWS::StackName}-WebsiteURL'
+
+  InfoPageURL:
+    Description: 'Server info page URL'
+    Value: !Sub 'http://${MyInstance.PublicDnsName}/info.php'
+    Export:
+      Name: !Sub '${AWS::StackName}-InfoPageURL'
+
+  SSHCommand:
+    Description: 'SSH command to connect to the instance using prod-lks key'
+    Value: !Sub 'ssh -i prod-lks.pem ec2-user@${MyInstance.PublicDnsName}'
+    Export:
+      Name: !Sub '${AWS::StackName}-SSHCommand'
+
+  VPCId:
+    Description: 'VPC ID'
+    Value: !Ref MyVPC
+    Export:
+      Name: !Sub '${AWS::StackName}-VPC'
+
+  SecurityGroupId:
+    Description: 'Security Group ID'
+    Value: !Ref InstanceSecurityGroup
+    Export:
+      Name: !Sub '${AWS::StackName}-SecurityGroup'
